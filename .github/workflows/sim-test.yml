@@ -24,11 +24,14 @@ jobs:
           echo "simulator: $UDID"
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
+          # Release, not Debug: Debug expects a running Metro packager and ships no
+          # main.jsbundle, so the app renders the red "No script URL provided" box.
           xcodebuild -workspace ios/RNProbe.xcworkspace -scheme RNProbe \
-            -configuration Debug -sdk iphonesimulator -derivedDataPath build-sim \
+            -configuration Release -sdk iphonesimulator -derivedDataPath build-sim \
             -destination "id=$UDID" CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -15
-          APP=$(find build-sim/Build/Products/Debug-iphonesimulator -maxdepth 1 -name "*.app" | head -1)
+          APP=$(find build-sim/Build/Products/Release-iphonesimulator -maxdepth 1 -name "*.app" | head -1)
           echo "APP=$APP"
+          ls -la "$APP/main.jsbundle"
           xcrun simctl install "$UDID" "$APP"
           echo "INSTALLED OK"
       - name: Launch app and capture screenshot
