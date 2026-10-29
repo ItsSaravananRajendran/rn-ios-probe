@@ -1,0 +1,45 @@
+name: RN iOS Simulator Smoke Test
+on: workflow_dispatch
+jobs:
+  sim:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode*.app | grep -vE "\.app\.app" | sort -V | tail -1)
+          sudo xcode-select -s "$XC"; xcodebuild -version
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: pod install
+        run: cd ios && pod install --repo-update
+      - name: List simulators
+        run: |
+          xcrun simctl list devices available | grep -A5 "iOS" | head -20
+      - name: Boot simulator and install
+        run: |
+          set -e
+          UDID=$(xcrun simctl list devices available | grep -m1 -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          echo "simulator: $UDID"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcodebuild -workspace ios/RNProbe.xcworkspace -scheme RNProbe \
+            -configuration Debug -sdk iphonesimulator -derivedDataPath build-sim \
+            -destination "id=$UDID" CODE_SIGNING_ALLOWED=NO build 2>&1 | tail -15
+          APP=$(find build-sim/Build/Products/Debug-iphonesimulator -maxdepth 1 -name "*.app" | head -1)
+          echo "APP=$APP"
+          xcrun simctl install "$UDID" "$APP"
+          echo "INSTALLED OK"
+      - name: Launch app and capture screenshot
+        run: |
+          UDID=$(xcrun simctl list devices available | grep -m1 -oE "[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}")
+          xcrun simctl launch "$UDID" com.saravanan.rnprobe
+          sleep 12
+          xcrun simctl io "$UDID" screenshot /tmp/rnprobe.png
+          echo "screenshot saved"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rn-sim-screenshot
+          path: /tmp/rnprobe.png
