@@ -81,3 +81,7 @@ build/
 *.xcworkspace
 !ios/*.xcworkspace
 .verify/
+
+out/
+shots/
+shots2/
