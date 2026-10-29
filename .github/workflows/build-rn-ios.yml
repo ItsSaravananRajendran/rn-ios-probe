@@ -1,0 +1,90 @@
+name: Build React Native iOS IPA
+
+# Builds a React Native app into a .ipa on GitHub Actions macOS runners.
+# The runner image already ships Node 22, Ruby 3.3 and CocoaPods 1.17, which
+# is everything `pod install` + `xcodebuild` need.
+#
+# Unlike a plain SwiftUI app, an RN build has two extra stages:
+#   1. `pod install` - resolves the native module dependencies into a .xcworkspace
+#   2. Metro bundling - the "Bundle React Native code and images" build phase
+#      runs `react-native-xcode.sh` inside the Xcode build itself
+#
+# Output: unsigned .ipa artifact (signing happens in testflight.yml).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode*.app | grep -vE "\.app\.app" | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          node --version
+          pod --version
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install --repo-update
+          cd ..
+          ls -la ios/*.xcworkspace
+
+      - name: Build (unsigned, generic iOS device)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace ios/RNProbe.xcworkspace \
+            -scheme RNProbe \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tail -40
+
+      - name: Package .ipa
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -1)
+          echo "App bundle: $APP"
+          test -n "$APP" || { echo "NO APP BUILT"; exit 1; }
+          rm -rf Payload && mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry RNProbe.ipa Payload
+          ls -la RNProbe.ipa
+
+      - name: Verify the built binary is a real iOS app
+        run: |
+          rm -rf verify && mkdir verify
+          unzip -q RNProbe.ipa -d verify
+          APP=verify/Payload/RNProbe.app
+          echo "--- Info.plist ---"
+          plutil -p "$APP/Info.plist" | grep -E "CFBundleIdentifier|CFBundleExecutable|MinimumOSVersion"
+          echo "--- binary ---"
+          file "$APP/RNProbe"
+          echo "--- platform (2 = iOS) ---"
+          otool -l "$APP/RNProbe" | grep -A3 LC_BUILD_VERSION | head -6
+          echo "--- JS bundle present? ---"
+          ls -la "$APP/main.jsbundle" 2>&1 || echo "no main.jsbundle"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RNProbe-ipa
+          path: RNProbe.ipa
